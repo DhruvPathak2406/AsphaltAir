@@ -1,95 +1,114 @@
-# AsphaltAir
 
-Data-driven analysis of **PM2.5 pollution associated with road construction and transportation activity**, exploring spatial and temporal pollution patterns to identify high-exposure zones and their implications for road safety and urban mobility.
+# Surat PM2.5 Pollution Intervention Prioritization
 
-## Overview
+An interactive data analytics project to identify PM2.5 pollution hotspots and prioritize potential intervention locations across Surat, Gujarat, India.
 
-Road construction and transportation activity can contribute to increased particulate pollution through construction dust, vehicle emissions, and traffic congestion.
+The project combines Python-based data analysis, geographic hotspot detection, and an interactive web dashboard to visualize pollution patterns and support data-driven intervention planning.
 
-**AsphaltAir** aims to analyze these patterns and understand how PM2.5 levels vary around roads and active construction areas.
+## Features
 
-## Objectives
+- **Data Preprocessing:** Clean and prepare raw pollution datasets.
+- **Pollution Analysis:** Analyse PM2.5 concentrations across measured locations.
+- **Weather Analysis:** Explore temperature and humidity alongside pollution measurements.
+- **Hotspot Detection:** Identify geographic pollution patterns using latitude and longitude.
+- **Intervention Priority Score (IPS):** Rank locations as High, Medium, or Low priority.
+- **Interactive Heatmap:** Visualize IPS and average PM2.5 on a map of Surat.
+- **Dashboard:** Explore summary statistics, coordinate groups, and individual location details.
 
-* Analyze PM2.5 concentration across different locations and time periods.
-* Study the relationship between traffic activity and PM2.5 levels.
-* Investigate PM2.5 patterns around road construction zones.
-* Identify pollution hotspots and high-exposure areas.
-* Visualize spatial and temporal pollution patterns.
-* Explore potential implications for road safety and urban mobility.
+## Tech Stack
 
-## Data
+| Category | Technologies |
+|---|---|
+| Programming | Python, JavaScript |
+| Data Analysis | Pandas, NumPy |
+| Visualization | Matplotlib, Leaflet.js |
+| Frontend | HTML5, CSS3, JavaScript |
+| Mapping | Leaflet, external map tiles |
+| Data Formats | CSV, XLSX |
 
-The project will work with publicly available datasets containing relevant information such as:
-
-* PM2.5 concentration
-* Traffic volume and transportation activity
-* Road locations and road networks
-* Road construction or maintenance locations
-* Weather conditions
-* Road safety and accident data, where available
-
-## Methodology
+## Project Structure
 
 ```text
-Data Collection
-      ↓
-Data Cleaning & Preprocessing
-      ↓
-PM2.5 + Road/Traffic Data Integration
-      ↓
-Exploratory Data Analysis
-      ↓
-Spatial & Temporal Analysis
-      ↓
-Pollution Hotspot Detection
-      ↓
-Visualization & Insights
+pm25-intervention-prioritization/
+├── data/
+│   ├── raw/
+│   └── processed/
+├── frontend/
+│   ├── index.html
+│   ├── style.css
+│   └── script.js
+├── src/
+│   ├── preprocessing.py
+│   ├── pollution_analysis.py
+│   ├── weather_analysis.py
+│   ├── hotspot_detection.py
+│   ├── priority_scoring.py
+│   └── visualization.py
+├── notebooks/
+├── reports/
+├── tests/
+├── main.py
+├── requirements.txt
+└── README.md
 ```
 
-## Technologies
+## Getting Started
 
-* Python
-* Pandas
-* NumPy
-* Matplotli
-* HTML
-* CSS
-* JavaScript
-* Leaflet.js
+### 1. Install Dependencies
 
-## Planned Analysis
+Ensure Python and pip are installed, then run:
 
-The project will investigate questions such as:
+```bash
+pip install -r requirements.txt
+```
 
-* Which road areas experience the highest PM2.5 concentrations?
-* How does PM2.5 change during peak traffic hours?
-* Do active road construction zones show higher particulate levels?
-* How do weather conditions influence PM2.5 dispersion?
-* Can pollution hotspots overlap with transportation or road-safety hotspots?
+### 2. Run the Analysis Pipeline
 
-## Visualizations
+From the project root directory:
 
-Planned visualizations include:
+```bash
+python main.py
+```
 
-* PM2.5 concentration trends
-* Traffic vs. PM2.5 comparisons
-* Geographic pollution heatmaps
-* Road construction zone analysis
-* Pollution hotspot maps
-* Temporal pollution patterns
+This executes the configured preprocessing and analysis pipeline and generates the output files defined by the project.
+
+### 3. Launch the Dashboard
+
+Open `frontend/index.html` in a modern web browser.
+
+Upload the generated cleaned dataset CSV and intervention priority CSV to explore the dashboard and heatmap.
+
+**Note:** An internet connection is required to load the external map tiles and mapping libraries.
+
+## Intervention Priority Score (IPS)
+
+The IPS provides a relative ranking of locations based on the project's prioritization model. Locations are classified into three categories:
+
+- 🔴 **High Priority**
+- 🟠 **Medium Priority**
+- 🟢 **Low Priority**
+
+The interactive map allows users to switch between the IPS heatmap and average PM2.5 heatmap, helping distinguish intervention priorities from measured pollution concentrations.
+
+## Limitations
+
+- Analysis is limited to the available datasets and measurement locations.
+- Traffic volume and population exposure are not currently included.
+- The heatmap represents coordinate-based observations rather than official municipal ward boundaries.
+- IPS is a project-specific ranking, not an official air-quality index or validated health-risk assessment.
 
 ## Future Scope
 
-* Real-time PM2.5 monitoring
-* Live traffic-data integration
-* PM2.5 prediction using machine learning
-* Automated pollution hotspot detection
-* Pollution-aware route analysis
-* Integration with road accident and black-spot datasets
-* Interactive transportation and environmental safety dashboard
+- Integrate official Surat municipal ward boundaries.
+- Add time-based pollution analysis and filtering.
+- Incorporate traffic, population exposure, and additional environmental variables.
+- Validate and improve the IPS methodology.
+- Deploy the dashboard with automated data updates.
 
-## Project Status
+## Objective
 
- **Currently in development**
+To develop a geographically informed, data-driven tool that identifies PM2.5 pollution hotspots and helps prioritize potential pollution interventions across Surat.
 
-This project combines **environmental data analysis, transportation analytics, geospatial analysis, and road-safety research** to study the relationship between road activity and PM2.5 pollution.
+## Disclaimer
+
+This project is an academic and analytical prototype. Its outputs should not be treated as official regulatory classifications or definitive public-health recommendations.
