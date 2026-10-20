@@ -51,12 +51,11 @@ Visualization & Insights
 * Python
 * Pandas
 * NumPy
-* Matplotlib
-* Seaborn
-* Scikit-learn
-* GeoPandas
-* Folium
-* Jupyter Notebook
+* Matplotli
+* HTML
+* CSS
+* JavaScript
+* Leaflet.js
 
 ## Planned Analysis
 
