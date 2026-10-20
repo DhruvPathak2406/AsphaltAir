@@ -4,9 +4,15 @@ const $ = (id) => document.getElementById(id);
 let cleanedRows = [];
 let priorityRows = [];
 let priorityMap = null;
+let heatLayer = null;
 let markerLayer = null;
 
+const SURAT_CENTER = [21.17, 72.83];
+const SURAT_ZOOM = 12;
 
+// =========================
+// 1. CSV PARSER
+// =========================
 
 function parseCSV(text) {
     const lines = text
@@ -55,7 +61,9 @@ function parseCSV(text) {
     });
 }
 
-
+// =========================
+// 2. HELPERS
+// =========================
 
 function number(row, key) {
     const value = row[key];
@@ -76,28 +84,25 @@ function display(value) {
         });
 }
 
-function getCoordinates(row) {
-    const latitude = number(row, "latitude_group")
+function coordinatesOf(row) {
+    const lat = number(row, "latitude_group")
         ?? number(row, "latitude");
 
-    const longitude = number(row, "longitude_group")
+    const lon = number(row, "longitude_group")
         ?? number(row, "longitude");
 
     if (
-        latitude == null ||
-        longitude == null ||
-        latitude < -90 ||
-        latitude > 90 ||
-        longitude < -180 ||
-        longitude > 180
+        lat == null || lon == null ||
+        lat < -90 || lat > 90 ||
+        lon < -180 || lon > 180
     ) {
         return null;
     }
 
-    return [latitude, longitude];
+    return [lat, lon];
 }
 
-function getPriorityColour(priority) {
+function priorityColour(priority) {
     const level = String(priority ?? "").trim().toLowerCase();
 
     if (level === "high") return "#dc2626";
@@ -107,88 +112,142 @@ function getPriorityColour(priority) {
     return "#64748b";
 }
 
+// Normalise values to a 0–1 range for heatmap intensity.
+function normalise(value, min, max) {
+    if (value == null) return 0;
+
+    if (max === min) return 1;
+
+    return Math.max(0, Math.min(1, (value - min) / (max - min)));
+}
+
+// =========================
+// 3. INITIALISE SURAT MAP
+// =========================
 
 function initialiseMap() {
-    const mapElement = $("priorityMap");
-
-    if (!mapElement) {
-        console.error("Could not find the priorityMap element.");
-        return;
-    }
+    if (priorityMap) return;
 
     if (typeof L === "undefined") {
         $("mapStatus").textContent =
-            "Leaflet could not load. Check your internet connection.";
+            "Leaflet failed to load. Check your internet connection.";
         return;
     }
 
-    if (priorityMap) return;
+    priorityMap = L.map("priorityMap").setView(
+        SURAT_CENTER,
+        SURAT_ZOOM
+    );
 
-    priorityMap = L.map("priorityMap").setView([20.5937, 78.9629], 5);
+    
+    L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        {
+            maxZoom: 19,
+            attribution: "Tiles &copy; Esri"
+        }
+    ).addTo(priorityMap);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+
+    heatLayer = L.heatLayer([], {
+        radius: 28,
+        blur: 22,
+        maxZoom: 16,
+        minOpacity: 0.35,
+        max: 1
     }).addTo(priorityMap);
 
     markerLayer = L.layerGroup().addTo(priorityMap);
 
     $("mapStatus").textContent =
-        "Map ready. Upload your intervention priority CSV to plot locations.";
+        "Surat map loaded. Upload your intervention priority CSV to display hotspots.";
 
-    // Helps Leaflet calculate the correct size after rendering.
-    setTimeout(() => {
-        priorityMap.invalidateSize();
-    }, 200);
+    $("resetMap").addEventListener("click", () => {
+        priorityMap.setView(SURAT_CENTER, SURAT_ZOOM);
+    });
+
+    $("mapMode").addEventListener("change", renderHeatmap);
+
+    setTimeout(() => priorityMap.invalidateSize(), 250);
 }
 
+// =========================
+// 4. RENDER HEATMAP
+// =========================
 
-function displayPriorityMap(rows) {
-    if (!priorityMap || !markerLayer) {
-        initialiseMap();
-    }
+function renderHeatmap() {
+    if (!priorityMap || !heatLayer || !markerLayer) return;
 
-    if (!priorityMap || !markerLayer) return;
+    const mode = $("mapMode").value;
 
     markerLayer.clearLayers();
 
-    const bounds = [];
-    let plotted = 0;
-    let skipped = 0;
+    const validRows = priorityRows
+        .map(row => ({
+            row,
+            coords: coordinatesOf(row),
+            value: mode === "ips"
+                ? number(row, "ips")
+                : number(row, "average_pm25")
+        }))
+        .filter(item => item.coords && item.value != null);
 
-    rows.forEach(row => {
-        const coordinates = getCoordinates(row);
+    if (!validRows.length) {
+        heatLayer.setLatLngs([]);
 
-        if (!coordinates) {
-            skipped++;
-            return;
-        }
+        $("mapStatus").textContent =
+            mode === "ips"
+                ? "No valid coordinates and IPS values found in the CSV."
+                : "No valid coordinates and average PM2.5 values found in the CSV.";
 
-        const [latitude, longitude] = coordinates;
+        return;
+    }
+
+    const values = validRows.map(item => item.value);
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+
+    const heatPoints = validRows.map(item => {
+        const intensity = normalise(item.value, minValue, maxValue);
+
+        // Keep small positive intensity visible while preserving rankings.
+        return [
+            item.coords[0],
+            item.coords[1],
+            Math.max(0.08, intensity)
+        ];
+    });
+
+    heatLayer.setLatLngs(heatPoints);
+
+    // Add clickable circles so users can inspect exact values.
+    validRows.forEach(item => {
+        const row = item.row;
+        const [lat, lon] = item.coords;
+
         const priority = String(row.priority ?? "Unclassified").trim();
-        const colour = getPriorityColour(priority);
 
-        const circle = L.circleMarker([latitude, longitude], {
-            radius: priority.toLowerCase() === "high" ? 10 : 7,
-            color: colour,
-            fillColor: colour,
-            fillOpacity: 0.75,
-            weight: 2
+        const circle = L.circleMarker([lat, lon], {
+            radius: 5,
+            color: priorityColour(priority),
+            fillColor: priorityColour(priority),
+            fillOpacity: 0.85,
+            weight: 1
         });
 
         const popup = document.createElement("div");
 
-        const heading = document.createElement("strong");
-        heading.textContent = `${priority} Priority`;
-        popup.appendChild(heading);
+        const title = document.createElement("strong");
+        title.textContent = `${priority} Priority`;
+        popup.appendChild(title);
 
         const details = [
-            `Latitude: ${display(latitude)}`,
-            `Longitude: ${display(longitude)}`,
+            `Latitude: ${display(lat)}`,
+            `Longitude: ${display(lon)}`,
+            `IPS: ${display(number(row, "ips"))}`,
             `Average PM2.5: ${display(number(row, "average_pm25"))}`,
             `Maximum PM2.5: ${display(number(row, "max_pm25"))}`,
-            `Readings: ${display(number(row, "readings"))}`,
-            `Intervention Priority Score: ${display(number(row, "ips"))}`
+            `Readings: ${display(number(row, "readings"))}`
         ];
 
         details.forEach(detail => {
@@ -199,27 +258,21 @@ function displayPriorityMap(rows) {
 
         circle.bindPopup(popup);
         circle.addTo(markerLayer);
-
-        bounds.push(coordinates);
-        plotted++;
     });
 
-    if (bounds.length === 1) {
-        priorityMap.setView(bounds[0], 13);
-    } else if (bounds.length > 1) {
-        priorityMap.fitBounds(bounds, {
-            padding: [30, 30],
-            maxZoom: 13
-        });
-    }
-
-    $("mapStatus").textContent = plotted
-        ? `Showing ${plotted} priority locations on the map.${skipped ? ` Skipped ${skipped} rows with invalid or missing coordinates.` : ""} Click a marker for details.`
-        : "No valid coordinates found. Check the latitude_group and longitude_group columns in your priority CSV.";
+    $("mapStatus").textContent =
+        `Showing ${validRows.length.toLocaleString()} locations across the Surat map. ` +
+        (mode === "ips"
+            ? "Heat intensity represents relative IPS values."
+            : "Heat intensity represents relative average PM2.5 values.") +
+        " Click a point for details.";
 
     setTimeout(() => priorityMap.invalidateSize(), 100);
 }
 
+// =========================
+// 5. LOAD CLEANED DATA
+// =========================
 
 $("dataFile").addEventListener("change", async event => {
     const file = event.target.files[0];
@@ -232,7 +285,7 @@ $("dataFile").addEventListener("change", async event => {
             .map(row => number(row, "PM2.5"))
             .filter(value => value != null);
 
-        const coordinates = new Set(
+        const uniqueLocations = new Set(
             cleanedRows
                 .filter(row =>
                     number(row, "latitude") != null &&
@@ -244,7 +297,8 @@ $("dataFile").addEventListener("change", async event => {
         );
 
         const average = pmValues.length
-            ? pmValues.reduce((sum, value) => sum + value, 0) / pmValues.length
+            ? pmValues.reduce((sum, value) => sum + value, 0) /
+              pmValues.length
             : null;
 
         const peak = pmValues.length
@@ -253,18 +307,22 @@ $("dataFile").addEventListener("change", async event => {
 
         $("average").textContent = display(average);
         $("peak").textContent = display(peak);
-        $("locations").textContent = coordinates.size.toLocaleString();
+        $("locations").textContent =
+            uniqueLocations.size.toLocaleString();
 
         $("status").textContent =
             `Loaded ${cleanedRows.length.toLocaleString()} rows from ${file.name}.`;
     } catch (error) {
         console.error(error);
+
         $("status").textContent =
-            "Could not read the cleaned CSV. Check that it is a valid CSV file.";
+            "Could not read the cleaned CSV. Please check the file format.";
     }
 });
 
-
+// =========================
+// 6. LOAD PRIORITY DATA
+// =========================
 
 $("priorityFile").addEventListener("change", async event => {
     const file = event.target.files[0];
@@ -276,71 +334,77 @@ $("priorityFile").addEventListener("change", async event => {
         const body = $("priorityRows");
         body.replaceChildren();
 
-        let high = 0;
+        const highCount = priorityRows.filter(row =>
+            String(row.priority ?? "").trim().toLowerCase() === "high"
+        ).length;
 
-        priorityRows.slice(0, 100).forEach(row => {
-            const priority = String(row.priority ?? "").trim();
+        $("highPriority").textContent = highCount.toLocaleString();
 
-            if (priority.toLowerCase() === "high") {
-                high++;
-            }
+        priorityRows
+            .slice()
+            .sort((a, b) =>
+                (number(b, "ips") ?? -Infinity) -
+                (number(a, "ips") ?? -Infinity)
+            )
+            .slice(0, 100)
+            .forEach(row => {
+                const tr = document.createElement("tr");
 
-            const tr = document.createElement("tr");
+                const values = [
+                    row.latitude_group ?? row.latitude,
+                    row.longitude_group ?? row.longitude,
+                    display(number(row, "average_pm25")),
+                    display(number(row, "readings")),
+                    display(number(row, "ips"))
+                ];
 
-            const values = [
-                row.latitude_group ?? row.latitude,
-                row.longitude_group ?? row.longitude,
-                display(number(row, "average_pm25")),
-                display(number(row, "readings")),
-                display(number(row, "ips"))
-            ];
+                values.forEach(value => {
+                    const td = document.createElement("td");
+                    td.textContent = value ?? "—";
+                    tr.appendChild(td);
+                });
 
-            values.forEach(value => {
                 const td = document.createElement("td");
-                td.textContent = value ?? "—";
+                const badge = document.createElement("span");
+
+                const priority = String(row.priority ?? "").trim();
+                const validLevel = ["High", "Medium", "Low"].find(
+                    level => level.toLowerCase() === priority.toLowerCase()
+                );
+
+                badge.className = `priority ${validLevel ?? ""}`;
+                badge.textContent = priority || "Unclassified";
+
+                td.appendChild(badge);
                 tr.appendChild(td);
+                body.appendChild(tr);
             });
-
-            const priorityCell = document.createElement("td");
-            const badge = document.createElement("span");
-
-            const validPriority = ["High", "Medium", "Low"].find(
-                level => level.toLowerCase() === priority.toLowerCase()
-            );
-
-            badge.className = `priority ${validPriority ?? ""}`;
-            badge.textContent = priority || "Unclassified";
-
-            priorityCell.appendChild(badge);
-            tr.appendChild(priorityCell);
-            body.appendChild(tr);
-        });
 
         if (!priorityRows.length) {
             const tr = document.createElement("tr");
             const td = document.createElement("td");
 
             td.colSpan = 6;
-            td.textContent = "No priority rows found.";
+            td.textContent = "No priority records found.";
 
             tr.appendChild(td);
             body.appendChild(tr);
         }
 
-        $("highPriority").textContent = high.toLocaleString();
-
-        // Update the map using the same priority CSV.
-        displayPriorityMap(priorityRows);
+        renderHeatmap();
 
         $("status").textContent =
-            `Loaded ${priorityRows.length.toLocaleString()} priority rows from ${file.name}.`;
+            `Loaded ${priorityRows.length.toLocaleString()} priority records from ${file.name}.`;
     } catch (error) {
         console.error(error);
+
         $("status").textContent =
-            "Could not read the priority CSV. Check the file format.";
+            "Could not read the priority CSV. Please check the file format.";
     }
 });
 
+// =========================
+// 7. START DASHBOARD
+// =========================
 
-
-document.addEventListener("DOMContentLoaded", initialiseMap);
+initialiseMap();
