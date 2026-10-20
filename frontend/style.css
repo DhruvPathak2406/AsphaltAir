@@ -1,0 +1,362 @@
+
+/* =========================
+   1. GLOBAL STYLES
+========================= */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #f3f6f8;
+    color: #172b3a;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+header {
+    background: #173447;
+    color: white;
+    padding: 34px max(22px, calc((100% - 1120px) / 2)) 30px;
+}
+
+.eyebrow {
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: #8bd3d1;
+    font-weight: bold;
+}
+
+h1 {
+    margin: 8px 0;
+    font-size: clamp(26px, 4vw, 38px);
+}
+
+.subtitle {
+    color: #d3e0e7;
+    margin-bottom: 0;
+    line-height: 1.6;
+}
+
+main {
+    max-width: 1120px;
+    margin: 26px auto;
+    padding: 0 20px;
+}
+
+/* =========================
+   2. DASHBOARD CARDS
+========================= */
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.card,
+.panel {
+    background: white;
+    border: 1px solid #e0e8ed;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 3px 12px #17344708;
+}
+
+.card span,
+.card small {
+    display: block;
+    color: #657985;
+}
+
+.card strong {
+    display: block;
+    font-size: 30px;
+    margin: 14px 0 8px;
+    overflow-wrap: anywhere;
+}
+
+.card small {
+    font-size: 12px;
+}
+
+/* =========================
+   3. PANELS AND INPUTS
+========================= */
+
+.panel {
+    margin-top: 18px;
+}
+
+.panel h2 {
+    margin: 0 0 8px;
+    font-size: 19px;
+}
+
+.panel p {
+    color: #657985;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.panel-heading {
+    margin-bottom: 18px;
+}
+
+label {
+    display: block;
+    font-weight: bold;
+    font-size: 14px;
+    margin: 16px 0 8px;
+}
+
+input[type="file"],
+select {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ccd9e0;
+    border-radius: 8px;
+    background: #f9fbfc;
+    color: #172b3a;
+    font: inherit;
+}
+
+input[type="file"] {
+    font-size: 13px;
+}
+
+#status,
+#mapStatus {
+    margin-bottom: 0;
+}
+
+/* =========================
+   4. MAP CONTROLS
+========================= */
+
+.map-controls {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.map-controls label {
+    flex: 1;
+    margin: 0;
+}
+
+.map-controls select {
+    margin-top: 8px;
+}
+
+button {
+    padding: 12px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: #173447;
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    min-height: 44px;
+}
+
+button:hover {
+    background: #24516a;
+}
+
+button:focus-visible,
+select:focus-visible {
+    outline: 3px solid #8bd3d1;
+    outline-offset: 2px;
+}
+
+/* =========================
+   5. SURAT MAP
+========================= */
+
+#priorityMap {
+    width: 100%;
+    height: 520px;
+    display: block;
+    border: 1px solid #dce5ea;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #e8eef2;
+    z-index: 1;
+}
+
+.leaflet-container {
+    width: 100%;
+    height: 100%;
+    font-family: Arial, Helvetica, sans-serif;
+    border-radius: 10px;
+}
+
+.leaflet-popup-content {
+    line-height: 1.7;
+    font-size: 13px;
+}
+
+/* =========================
+   6. MAP LEGEND
+========================= */
+
+.map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 18px;
+    margin: 16px 0 10px;
+    color: #435866;
+    font-size: 13px;
+}
+
+.map-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.legend-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.legend-dot.high {
+    background: #dc2626;
+}
+
+.legend-dot.medium {
+    background: #f59e0b;
+}
+
+.legend-dot.low {
+    background: #16a34a;
+}
+
+/* =========================
+   7. PRIORITY TABLE
+========================= */
+
+.table-wrap {
+    overflow-x: auto;
+    margin-top: 16px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+th,
+td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid #e8eef1;
+    white-space: nowrap;
+}
+
+th {
+    color: #607580;
+    background: #f8fafb;
+}
+
+tbody tr:hover {
+    background: #f8fafb;
+}
+
+/* =========================
+   8. PRIORITY BADGES
+========================= */
+
+.priority {
+    font-weight: bold;
+    border-radius: 20px;
+    padding: 5px 10px;
+    display: inline-block;
+}
+
+.High {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.Medium {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.Low {
+    background: #dcfce7;
+    color: #166534;
+}
+
+/* =========================
+   9. NOTES AND CODE
+========================= */
+
+.note {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #657985;
+    margin: 22px 2px 36px;
+}
+
+code {
+    background: #f1f5f7;
+    padding: 2px 5px;
+    border-radius: 4px;
+}
+
+/* =========================
+   10. RESPONSIVE DESIGN
+========================= */
+
+@media (max-width: 760px) {
+    main {
+        padding: 0 12px;
+    }
+
+    .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .card,
+    .panel {
+        padding: 15px;
+    }
+
+    #priorityMap {
+        height: 420px;
+    }
+}
+
+@media (max-width: 520px) {
+    .map-controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .map-controls button {
+        width: 100%;
+    }
+
+    #priorityMap {
+        height: 360px;
+    }
+
+    .map-legend {
+        gap: 12px;
+    }
+}
+
+@media (max-width: 400px) {
+    .cards {
+        grid-template-columns: 1fr;
+    }
+}
