@@ -5,6 +5,7 @@ let cleanedRows = [];
 let priorityRows = [];
 let priorityMap = null;
 let heatLayer = null;
+let zoneLayer = null;
 let markerLayer = null;
 
 const SURAT_CENTER = [21.17, 72.83];
@@ -149,14 +150,23 @@ function initialiseMap() {
     ).addTo(priorityMap);
 
 
-    heatLayer = L.heatLayer([], {
-        radius: 28,
-        blur: 22,
-        maxZoom: 16,
-        minOpacity: 0.35,
-        max: 1
-    }).addTo(priorityMap);
+    if (typeof L.heatLayer === "function") {
+        heatLayer = L.heatLayer([], {
+            radius: 28,
+            blur: 22,
+            maxZoom: 16,
+            minOpacity: 0.35,
+            max: 1,
+            gradient: {
+                0.08: "#16a34a",
+                0.4: "#facc15",
+                0.7: "#f97316",
+                1.0: "#dc2626"
+            }
+        }).addTo(priorityMap);
+    }
 
+    zoneLayer = L.layerGroup().addTo(priorityMap);
     markerLayer = L.layerGroup().addTo(priorityMap);
 
     $("mapStatus").textContent =
@@ -171,16 +181,79 @@ function initialiseMap() {
     setTimeout(() => priorityMap.invalidateSize(), 250);
 }
 
+function renderCleanedData() {
+    const pmValues = cleanedRows
+        .map(row => number(row, "PM2.5"))
+        .filter(value => value != null);
+    const locations = new Set(
+        cleanedRows
+            .filter(row => number(row, "latitude") != null && number(row, "longitude") != null)
+            .map(row => `${Number(row.latitude).toFixed(4)},${Number(row.longitude).toFixed(4)}`)
+    );
+    $("average").textContent = display(pmValues.length ? pmValues.reduce((a, b) => a + b, 0) / pmValues.length : null);
+    $("peak").textContent = display(pmValues.length ? Math.max(...pmValues) : null);
+    $("locations").textContent = locations.size.toLocaleString();
+}
+
+function renderPriorityData() {
+    const body = $("priorityRows");
+    body.replaceChildren();
+    $("highPriority").textContent = priorityRows.filter(row =>
+        String(row.priority ?? "").trim().toLowerCase() === "high"
+    ).length.toLocaleString();
+    priorityRows.slice().sort((a, b) => (number(b, "ips") ?? -Infinity) - (number(a, "ips") ?? -Infinity))
+        .slice(0, 100).forEach(row => {
+            const tr = document.createElement("tr");
+            [
+                row.latitude_group ?? row.latitude,
+                row.longitude_group ?? row.longitude,
+                display(number(row, "average_pm25")),
+                display(number(row, "readings")),
+                display(number(row, "ips"))
+            ].forEach(value => {
+                const td = document.createElement("td");
+                td.textContent = value ?? "—";
+                tr.appendChild(td);
+            });
+            const td = document.createElement("td");
+            const badge = document.createElement("span");
+            const priority = String(row.priority ?? "").trim();
+            badge.className = `priority ${["High", "Medium", "Low"].find(level => level.toLowerCase() === priority.toLowerCase()) ?? ""}`;
+            badge.textContent = priority || "Unclassified";
+            td.appendChild(badge);
+            tr.appendChild(td);
+            body.appendChild(tr);
+        });
+    renderHeatmap();
+}
+
+async function refreshLiveData() {
+    try {
+        const response = await fetch("/api/dashboard", { cache: "no-store" });
+        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        const data = await response.json();
+        cleanedRows = data.cleaned;
+        priorityRows = data.priority;
+        renderCleanedData();
+        renderPriorityData();
+        $("status").textContent = `Live data connected: ${cleanedRows.length.toLocaleString()} readings, updated ${new Date().toLocaleTimeString()}.`;
+    } catch (error) {
+        console.error(error);
+        $("status").textContent = "Live server unavailable. Start it with: python server.py";
+    }
+}
+
 // =========================
 // 4. RENDER HEATMAP
 // =========================
 
 function renderHeatmap() {
-    if (!priorityMap || !heatLayer || !markerLayer) return;
+    if (!priorityMap || !markerLayer) return;
 
     const mode = $("mapMode").value;
 
     markerLayer.clearLayers();
+    if (zoneLayer) zoneLayer.clearLayers();
 
     const validRows = priorityRows
         .map(row => ({
@@ -193,7 +266,7 @@ function renderHeatmap() {
         .filter(item => item.coords && item.value != null);
 
     if (!validRows.length) {
-        heatLayer.setLatLngs([]);
+        if (heatLayer) heatLayer.setLatLngs([]);
 
         $("mapStatus").textContent =
             mode === "ips"
@@ -218,19 +291,50 @@ function renderHeatmap() {
         ];
     });
 
-    heatLayer.setLatLngs(heatPoints);
+    if (heatLayer) heatLayer.setLatLngs(heatPoints);
 
-    // Add clickable circles so users can inspect exact values.
+    // Draw lower-priority zones first so high-priority zones remain visible.
+    if (!heatLayer && zoneLayer) {
+        const priorityRank = { low: 0, medium: 1, high: 2 };
+        validRows
+            .slice()
+            .sort((a, b) =>
+                (priorityRank[String(a.row.priority ?? "").toLowerCase()] ?? -1) -
+                (priorityRank[String(b.row.priority ?? "").toLowerCase()] ?? -1)
+            )
+            .forEach(item => {
+                const priority = String(item.row.priority ?? "Unclassified").trim();
+                const colour = priorityColour(priority);
+                const level = priority.toLowerCase();
+                const radius = level === "high"
+                    ? 500
+                    : level === "medium"
+                        ? 350
+                        : 220;
+
+                L.circle(item.coords, {
+                    radius,
+                    color: colour,
+                    fillColor: colour,
+                    fillOpacity: 0.3,
+                    opacity: 0.55,
+                    weight: 1
+                }).addTo(zoneLayer);
+            });
+    }
+
+    // Add clickable points so users can inspect exact values.
     validRows.forEach(item => {
         const row = item.row;
         const [lat, lon] = item.coords;
 
         const priority = String(row.priority ?? "Unclassified").trim();
+        const colour = priorityColour(priority);
 
         const circle = L.circleMarker([lat, lon], {
             radius: 5,
-            color: priorityColour(priority),
-            fillColor: priorityColour(priority),
+            color: colour,
+            fillColor: colour,
             fillOpacity: 0.85,
             weight: 1
         });
@@ -408,3 +512,5 @@ $("priorityFile").addEventListener("change", async event => {
 // =========================
 
 initialiseMap();
+refreshLiveData();
+setInterval(refreshLiveData, 5000);
