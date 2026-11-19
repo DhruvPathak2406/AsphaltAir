@@ -3,10 +3,20 @@ const $ = (id) => document.getElementById(id);
 
 let cleanedRows = [];
 let priorityRows = [];
+let uploadedCleanedRows = null;
+let uploadedPriorityRows = null;
+let uploadedCleanedFileName = "";
+let uploadedHasTimestamp = null;
 let priorityMap = null;
 let heatLayer = null;
 let zoneLayer = null;
 let markerLayer = null;
+let manualMode = false;
+let dataVersion = 0;
+let cleanedCsv = null;
+let cleanedFileName = "";
+let liveMapFitted = false;
+let uploadLimitBytes = 20 * 1024 * 1024;
 
 const SURAT_CENTER = [21.17, 72.83];
 const SURAT_ZOOM = 12;
@@ -122,8 +132,321 @@ function normalise(value, min, max) {
     return Math.max(0, Math.min(1, (value - min) / (max - min)));
 }
 
+function updateTrendDownloadState() {
+    const ready = Boolean(uploadedCleanedRows?.length && uploadedHasTimestamp !== false);
+    $("downloadTrend").disabled = !ready;
+    $("trendStatus").textContent = ready
+        ? `Ready to download a graph for ${uploadedCleanedFileName}.`
+        : uploadedHasTimestamp === false
+            ? "A date/time column is required for a trend."
+            : "Load a cleaned dataset to enable the download.";
+}
+
+function normalizedColumnName(value) {
+    return String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function parseTrendDate(value, timeValue = "") {
+    if (value == null || String(value).trim() === "") return null;
+
+    const text = `${String(value).trim()}${timeValue ? ` ${timeValue}` : ""}`;
+    const date = new Date(text);
+    if (Number.isFinite(date.getTime())) return date;
+
+    const match = text.match(
+        /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+    );
+    if (!match) return null;
+
+    let year = Number(match[3]);
+    if (match[3].length === 2) year += year < 70 ? 2000 : 1900;
+    const fallbackDate = new Date(
+        year,
+        Number(match[2]) - 1,
+        Number(match[1]),
+        Number(match[4] ?? 0),
+        Number(match[5] ?? 0),
+        Number(match[6] ?? 0)
+    );
+    return Number.isFinite(fallbackDate.getTime()) ? fallbackDate : null;
+}
+
+async function createTrendPng(rows) {
+    if (!rows.length) {
+        throw new Error("The cleaned dataset has no rows to plot.");
+    }
+
+    const headers = Object.keys(rows[0]);
+    const timestampNames = new Set([
+        "timestamp", "datetime", "dateandtime", "recordedat", "observedat",
+        "measuredat", "createdat", "collectedat", "sampledat", "datetimeutc"
+    ]);
+    const dateNames = new Set([
+        "date", "data", "day", "measurementdate", "sampledate", "recordeddate",
+        "daterecorded", "observationdate", "dateofobservation", "collectiondate",
+        "datecollected", "samplingdate"
+    ]);
+    const timeNames = new Set([
+        "time", "measurementtime", "timeofmeasurement", "sampletime", "recordedtime",
+        "timeofobservation", "timecollected"
+    ]);
+
+    const timestampColumn = headers.find(header =>
+        timestampNames.has(normalizedColumnName(header))
+    ) ?? headers.find(header => rows.some(row =>
+        /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(String(row[header] ?? "").trim())
+    ));
+    const dateColumn = timestampColumn ? null : headers.find(header =>
+        dateNames.has(normalizedColumnName(header))
+    );
+    const timeColumn = dateColumn
+        ? headers.find(header => timeNames.has(normalizedColumnName(header)))
+        : null;
+    const dateKey = timestampColumn ?? dateColumn;
+    if (!dateKey) {
+        throw new Error("The cleaned dataset needs a parseable date/time column.");
+    }
+
+    const excludedNames = new Set([
+        ...timestampNames, ...dateNames, ...timeNames,
+        "latitude", "lat", "longitude", "lon", "long", "sourcefile",
+        "id", "index", "recordid", "serialnumber", "stationid"
+    ]);
+    const numericColumns = headers.filter(header => {
+        const name = normalizedColumnName(header);
+        return !excludedNames.has(name) &&
+            !name.endsWith("id") &&
+            rows.some(row => number(row, header) != null);
+    });
+    const pm25Column = numericColumns.find(header =>
+        normalizedColumnName(header).startsWith("pm25")
+    );
+    const measurementColumns = pm25Column ? [pm25Column] : numericColumns;
+    if (!measurementColumns.length) {
+        throw new Error("The cleaned dataset has no numeric measurements to plot.");
+    }
+
+    const dailyValues = new Map();
+    rows.forEach(row => {
+        const rawDate = row[dateKey];
+        const date = parseTrendDate(
+            rawDate,
+            timeColumn ? row[timeColumn] : ""
+        );
+        if (!date) return;
+
+        const isoDate = String(rawDate).trim().match(
+            /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/
+        );
+        const day = isoDate
+            ? `${isoDate[1]}-${String(isoDate[2]).padStart(2, "0")}-${String(isoDate[3]).padStart(2, "0")}`
+            : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+        if (!dailyValues.has(day)) {
+            dailyValues.set(day, {
+                sums: Array(measurementColumns.length).fill(0),
+                counts: Array(measurementColumns.length).fill(0)
+            });
+        }
+        const daily = dailyValues.get(day);
+        measurementColumns.forEach((column, index) => {
+            const value = number(row, column);
+            if (value == null) return;
+            daily.sums[index] += value;
+            daily.counts[index] += 1;
+        });
+    });
+
+    const days = [...dailyValues.keys()].sort();
+    const plottedValues = [];
+    days.forEach(day => {
+        const daily = dailyValues.get(day);
+        daily.counts.forEach((count, index) => {
+            if (count) plottedValues.push(daily.sums[index] / count);
+        });
+    });
+    if (!plottedValues.length) {
+        throw new Error("No numeric measurements have valid date/time values to plot.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 680;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create the graph canvas.");
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const left = 105;
+    const right = 55;
+    const top = 88;
+    const bottom = 145;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    let minValue = Math.min(...plottedValues);
+    let maxValue = Math.max(...plottedValues);
+    if (minValue === maxValue) {
+        const padding = Math.abs(minValue) * 0.05 || 1;
+        minValue -= padding;
+        maxValue += padding;
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.font = "16px Arial";
+    context.textAlign = "center";
+    context.fillStyle = "#172b3a";
+    context.fillText(
+        measurementColumns.length === 1
+            ? `Daily Average ${measurementColumns[0]}`
+            : "Daily Average Measurements",
+        width / 2,
+        42
+    );
+
+    for (let tick = 0; tick <= 4; tick++) {
+        const y = top + plotHeight * tick / 4;
+        const value = maxValue - (maxValue - minValue) * tick / 4;
+        context.strokeStyle = "#dce5ea";
+        context.beginPath();
+        context.moveTo(left, y);
+        context.lineTo(width - right, y);
+        context.stroke();
+        context.fillStyle = "#526673";
+        context.textAlign = "right";
+        context.fillText(
+            value.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+            left - 12,
+            y + 5
+        );
+    }
+
+    context.strokeStyle = "#526673";
+    context.beginPath();
+    context.moveTo(left, top);
+    context.lineTo(left, top + plotHeight);
+    context.lineTo(width - right, top + plotHeight);
+    context.stroke();
+
+    context.textAlign = "center";
+    context.fillStyle = "#526673";
+    const labelCount = Math.min(6, days.length);
+    for (let label = 0; label < labelCount; label++) {
+        const index = labelCount === 1
+            ? 0
+            : Math.round(label * (days.length - 1) / (labelCount - 1));
+        const x = left + (days.length === 1
+            ? plotWidth / 2
+            : index * plotWidth / (days.length - 1));
+        context.fillText(days[index], x, top + plotHeight + 28);
+    }
+    context.fillText("Date", left + plotWidth / 2, top + plotHeight + 58);
+    context.save();
+    context.translate(28, top + plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.fillText(
+        measurementColumns.length === 1
+            ? `${measurementColumns[0]} (dataset units)`
+            : "Daily average (dataset units)",
+        0,
+        0
+    );
+    context.restore();
+
+    const colors = ["#167d9a", "#dc2626", "#16a34a", "#7c3aed", "#f59e0b", "#0891b2"];
+    measurementColumns.forEach((column, seriesIndex) => {
+        const color = colors[seriesIndex % colors.length];
+        context.strokeStyle = color;
+        context.fillStyle = color;
+        context.lineWidth = 3;
+        context.beginPath();
+        let penDown = false;
+        days.forEach((day, dayIndex) => {
+            const daily = dailyValues.get(day);
+            const count = daily.counts[seriesIndex];
+            if (!count) {
+                penDown = false;
+                return;
+            }
+            const value = daily.sums[seriesIndex] / count;
+            const x = left + (days.length === 1
+                ? plotWidth / 2
+                : dayIndex * plotWidth / (days.length - 1));
+            const y = top + (maxValue - value) * plotHeight / (maxValue - minValue);
+            if (penDown) context.lineTo(x, y);
+            else context.moveTo(x, y);
+            penDown = true;
+        });
+        context.stroke();
+
+        days.forEach((day, dayIndex) => {
+            const daily = dailyValues.get(day);
+            const count = daily.counts[seriesIndex];
+            if (!count) return;
+            const value = daily.sums[seriesIndex] / count;
+            const x = left + (days.length === 1
+                ? plotWidth / 2
+                : dayIndex * plotWidth / (days.length - 1));
+            const y = top + (maxValue - value) * plotHeight / (maxValue - minValue);
+            context.beginPath();
+            context.arc(x, y, 4, 0, Math.PI * 2);
+            context.fill();
+        });
+    });
+
+    let legendX = left;
+    let legendY = height - 33;
+    context.font = "14px Arial";
+    context.textAlign = "left";
+    measurementColumns.forEach((column, index) => {
+        const labelWidth = context.measureText(column).width + 34;
+        if (legendX + labelWidth > width - right) {
+            legendX = left;
+            legendY += 22;
+        }
+        context.fillStyle = colors[index % colors.length];
+        context.fillRect(legendX, legendY - 11, 14, 14);
+        context.fillStyle = "#172b3a";
+        context.fillText(column, legendX + 21, legendY);
+        legendX += labelWidth;
+    });
+
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+            if (blob) resolve(blob);
+            else reject(new Error("Could not export the graph as a PNG."));
+        }, "image/png");
+    });
+}
+
+async function downloadTrendPng() {
+    if (!uploadedCleanedRows?.length) return;
+
+    try {
+        const blob = await createTrendPng(uploadedCleanedRows);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const fileStem = uploadedCleanedFileName
+            .replace(/\.[^.]+$/, "")
+            .replace(/[^a-z0-9_-]+/gi, "_")
+            .replace(/^_+|_+$/g, "") || "dataset";
+        link.href = url;
+        link.download = `daily_trend_${fileStem}.png`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        $("trendStatus").textContent =
+            `Downloaded daily trend for ${uploadedCleanedFileName}.`;
+    } catch (error) {
+        console.error(error);
+        $("trendStatus").textContent =
+            error instanceof Error ? error.message : "Could not generate the trend PNG.";
+    }
+}
+
 // =========================
-// 3. INITIALISE SURAT MAP
+// 3. INITIALISE MAP
 // =========================
 
 function initialiseMap() {
@@ -170,15 +493,25 @@ function initialiseMap() {
     markerLayer = L.layerGroup().addTo(priorityMap);
 
     $("mapStatus").textContent =
-        "Surat map loaded. Upload your intervention priority CSV to display hotspots.";
+        "Map loaded. Load data with coordinates and PM2.5 to display hotspots.";
 
-    $("resetMap").addEventListener("click", () => {
-        priorityMap.setView(SURAT_CENTER, SURAT_ZOOM);
-    });
+    $("resetMap").addEventListener("click", fitMapToData);
 
     $("mapMode").addEventListener("change", renderHeatmap);
 
     setTimeout(() => priorityMap.invalidateSize(), 250);
+}
+
+function fitMapToData() {
+    if (!priorityMap) return;
+    const coordinates = (priorityRows.length ? priorityRows : cleanedRows)
+        .map(coordinatesOf)
+        .filter(coords => coords != null);
+    if (coordinates.length) {
+        priorityMap.fitBounds(L.latLngBounds(coordinates), { padding: [30, 30], maxZoom: 14 });
+    } else {
+        priorityMap.setView(SURAT_CENTER, SURAT_ZOOM);
+    }
 }
 
 function renderCleanedData() {
@@ -224,22 +557,44 @@ function renderPriorityData() {
             tr.appendChild(td);
             body.appendChild(tr);
         });
+    if (!priorityRows.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 6;
+        td.textContent = "No priority groups. At least 10 PM2.5 readings per coordinate group are required.";
+        tr.appendChild(td);
+        body.appendChild(tr);
+    }
     renderHeatmap();
 }
 
 async function refreshLiveData() {
+    if (manualMode) return;
+    const version = dataVersion;
     try {
         const response = await fetch("/api/dashboard", { cache: "no-store" });
-        if (!response.ok) throw new Error(`Server returned ${response.status}`);
         const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
+        if (Number.isSafeInteger(data.upload_limit_bytes) && data.upload_limit_bytes > 0) {
+            uploadLimitBytes = data.upload_limit_bytes;
+            $("uploadLimit").textContent =
+                `up to ${Math.floor(uploadLimitBytes / (1024 * 1024))} MB`;
+        }
+        if (manualMode || version !== dataVersion) return;
         cleanedRows = data.cleaned;
         priorityRows = data.priority;
         renderCleanedData();
         renderPriorityData();
+        if (!liveMapFitted && cleanedRows.some(row => coordinatesOf(row))) {
+            fitMapToData();
+            liveMapFitted = true;
+        }
         $("status").textContent = `Live data connected: ${cleanedRows.length.toLocaleString()} readings, updated ${new Date().toLocaleTimeString()}.`;
     } catch (error) {
         console.error(error);
-        $("status").textContent = "Live server unavailable. Start it with: python server.py";
+        if (!manualMode && version === dataVersion) {
+            $("status").textContent = `Live data unavailable: ${error.message}. Start the server with python server.py.`;
+        }
     }
 }
 
@@ -365,7 +720,7 @@ function renderHeatmap() {
     });
 
     $("mapStatus").textContent =
-        `Showing ${validRows.length.toLocaleString()} locations across the Surat map. ` +
+        `Showing ${validRows.length.toLocaleString()} locations. ` +
         (mode === "ips"
             ? "Heat intensity represents relative IPS values."
             : "Heat intensity represents relative average PM2.5 values.") +
@@ -378,12 +733,121 @@ function renderHeatmap() {
 // 5. LOAD CLEANED DATA
 // =========================
 
+$("downloadTrend").addEventListener("click", downloadTrendPng);
+
+$("uploadForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const file = $("rawFile").files[0];
+    if (!file) return;
+    manualMode = true;
+    const version = ++dataVersion;
+    $("uploadButton").disabled = true;
+    $("uploadStatus").textContent = "Cleaning and analysing dataset...";
+    $("status").textContent = "Live updates paused while processing the upload.";
+    try {
+        if (window.location.protocol === "file:") {
+            throw new Error("Open http://localhost:8000 after starting python server.py; uploading does not work from a file URL.");
+        }
+        if (!file.size || file.size > uploadLimitBytes) {
+            const limitMb = Math.floor(uploadLimitBytes / (1024 * 1024));
+            throw new Error(`Choose a non-empty file no larger than ${limitMb} MB.`);
+        }
+        if (!/\.(csv|xlsx)$/i.test(file.name)) {
+            throw new Error("Upload a CSV or XLSX file.");
+        }
+        const params = new URLSearchParams();
+        document.querySelectorAll("#uploadForm input[name]").forEach(input => {
+            if (input.value.trim()) params.set(input.name, input.value.trim());
+        });
+        const response = await fetch(`/api/upload?${params}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(file.name) },
+            body: file
+        });
+        if (!response.headers.get("content-type")?.includes("application/json")) {
+            throw new Error("The upload server is unavailable. Restart python server.py and open http://localhost:8000.");
+        }
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
+        if (version !== dataVersion) return;
+        cleanedRows = data.cleaned;
+        priorityRows = data.priority;
+        uploadedCleanedRows = data.cleaned;
+        uploadedPriorityRows = data.priority;
+        uploadedCleanedFileName = file.name;
+        uploadedHasTimestamp = data.has_timestamp;
+        cleanedCsv = data.cleaned_csv;
+        cleanedFileName = file.name.replace(/\.[^.]+$/, "") || "dataset";
+        $("downloadCleaned").disabled = false;
+        renderCleanedData();
+        renderPriorityData();
+        fitMapToData();
+        updateTrendDownloadState();
+        $("status").textContent = `Showing uploaded dataset: ${file.name}. Live updates are paused.`;
+        $("uploadStatus").textContent =
+            `Cleaned ${data.input_rows.toLocaleString()} rows to ${data.output_rows.toLocaleString()} rows.` +
+            (data.skipped_malformed_rows
+                ? ` Skipped ${data.skipped_malformed_rows.toLocaleString()} malformed CSV row(s) that had extra or inconsistent columns.`
+                : "") +
+            (data.has_timestamp ? "" : " No date/time detected; rows were kept, but a trend requires dates.");
+    } catch (error) {
+        if (version === dataVersion) {
+            const message = error instanceof TypeError
+                ? "Cannot reach the upload server. Start or restart python server.py and open http://localhost:8000."
+                : error.message;
+            $("uploadStatus").textContent = `Upload failed: ${message}`;
+        }
+    } finally {
+        $("uploadButton").disabled = false;
+    }
+});
+
+$("downloadCleaned").addEventListener("click", () => {
+    if (cleanedCsv == null) return;
+    const url = URL.createObjectURL(new Blob([cleanedCsv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `cleaned_${cleanedFileName}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+$("resumeLive").addEventListener("click", () => {
+    manualMode = false;
+    dataVersion++;
+    liveMapFitted = false;
+    cleanedCsv = null;
+    $("downloadCleaned").disabled = true;
+    $("uploadStatus").textContent = "";
+    uploadedCleanedRows = null;
+    uploadedPriorityRows = null;
+    uploadedHasTimestamp = null;
+    updateTrendDownloadState();
+    refreshLiveData();
+});
+
 $("dataFile").addEventListener("change", async event => {
     const file = event.target.files[0];
     if (!file) return;
 
+    manualMode = true;
+    dataVersion++;
+    cleanedCsv = null;
+    $("downloadCleaned").disabled = true;
+    uploadedHasTimestamp = null;
+    uploadedCleanedRows = null;
+    uploadedCleanedFileName = "";
+    updateTrendDownloadState();
+
     try {
-        cleanedRows = parseCSV(await file.text());
+        const rows = parseCSV(await file.text());
+        if (!rows.length) throw new Error("The cleaned CSV has no data rows.");
+
+        cleanedRows = rows;
+        uploadedCleanedRows = rows;
+        uploadedCleanedFileName = file.name;
 
         const pmValues = cleanedRows
             .map(row => number(row, "PM2.5"))
@@ -413,14 +877,18 @@ $("dataFile").addEventListener("change", async event => {
         $("peak").textContent = display(peak);
         $("locations").textContent =
             uniqueLocations.size.toLocaleString();
+        fitMapToData();
 
         $("status").textContent =
             `Loaded ${cleanedRows.length.toLocaleString()} rows from ${file.name}.`;
+        updateTrendDownloadState();
     } catch (error) {
         console.error(error);
 
         $("status").textContent =
             "Could not read the cleaned CSV. Please check the file format.";
+        $("trendStatus").textContent =
+            error instanceof Error ? error.message : "Could not read the cleaned CSV.";
     }
 });
 
@@ -432,8 +900,15 @@ $("priorityFile").addEventListener("change", async event => {
     const file = event.target.files[0];
     if (!file) return;
 
+    manualMode = true;
+    dataVersion++;
+    uploadedPriorityRows = null;
+    updateTrendDownloadState();
+
     try {
         priorityRows = parseCSV(await file.text());
+        if (!priorityRows.length) throw new Error("The priority CSV has no data rows.");
+        uploadedPriorityRows = priorityRows;
 
         const body = $("priorityRows");
         body.replaceChildren();
@@ -496,14 +971,18 @@ $("priorityFile").addEventListener("change", async event => {
         }
 
         renderHeatmap();
+        fitMapToData();
 
         $("status").textContent =
             `Loaded ${priorityRows.length.toLocaleString()} priority records from ${file.name}.`;
+        updateTrendDownloadState();
     } catch (error) {
         console.error(error);
 
         $("status").textContent =
             "Could not read the priority CSV. Please check the file format.";
+        $("trendStatus").textContent =
+            error instanceof Error ? error.message : "Could not read the priority CSV.";
     }
 });
 

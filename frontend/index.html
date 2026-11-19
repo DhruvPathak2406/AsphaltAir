@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>Surat Pollution Intervention Dashboard</title>
+    <title>Pollution Intervention Dashboard</title>
 
     <link rel="stylesheet" href="style.css">
 
@@ -19,7 +19,7 @@
 <body>
     <header>
         <p class="eyebrow">AIR QUALITY ANALYTICS</p>
-        <h1>Surat Pollution Intervention Dashboard</h1>
+        <h1>Pollution Intervention Dashboard</h1>
         <p class="subtitle">
             Identify pollution hotspots and prioritise intervention locations
             using PM2.5 readings and Intervention Priority Scores.
@@ -58,10 +58,34 @@
         <section class="panel">
             <h2>Load your analysis</h2>
             <p>
-                Live mode polls the local analysis server and refreshes when
-                new readings are available.
+                Upload a raw CSV or XLSX file to clean and analyse it separately
+                from the live data. The file stays on this local server.
             </p>
 
+            <form id="uploadForm">
+                <label for="rawFile">City dataset (CSV or XLSX, <span id="uploadLimit">up to 20 MB</span>)</label>
+                <input id="rawFile" type="file" accept=".csv,.xlsx" required>
+                <details>
+                    <summary>Map columns if automatic detection does not match your file</summary>
+                    <p>Enter the exact column names from your dataset. Leave fields blank for automatic detection.</p>
+                    <div class="column-mapping">
+                        <label>Date or timestamp <input name="timestamp" placeholder="e.g. observed_on"></label>
+                        <label>Separate time <input name="time" placeholder="e.g. reading_time"></label>
+                        <label>Latitude <input name="latitude" placeholder="e.g. northing"></label>
+                        <label>Longitude <input name="longitude" placeholder="e.g. easting"></label>
+                        <label>PM2.5 <input name="PM2.5" placeholder="e.g. fine_particles"></label>
+                        <label>Temperature <input name="TEMP." placeholder="e.g. air_temp"></label>
+                        <label>Humidity <input name="HUMI." placeholder="e.g. relative_humidity"></label>
+                    </div>
+                </details>
+                <button id="uploadButton" type="submit">Clean and analyse</button>
+                <button id="downloadCleaned" type="button" disabled>Download cleaned CSV</button>
+                <button id="resumeLive" type="button">Return to live data</button>
+            </form>
+            <p id="uploadStatus" role="status" aria-live="polite"></p>
+
+            <details>
+            <summary>Load existing analysis CSVs</summary>
             <label for="dataFile">Cleaned dataset CSV</label>
             <input id="dataFile" type="file" accept=".csv">
 
@@ -70,15 +94,26 @@
             </label>
             <input id="priorityFile" type="file" accept=".csv">
 
+            <p>
+                You can also load previously generated cleaned and priority CSVs.
+            </p>
+            </details>
+            <button id="downloadTrend" type="button" disabled>
+                Download daily trend PNG
+            </button>
+            <p id="trendStatus" role="status" aria-live="polite">
+                Load a cleaned dataset to enable the download.
+            </p>
+
             <p id="status" role="status">
                 Connecting to the live analysis server...
             </p>
         </section>
 
-        <!-- Interactive Surat heatmap -->
+        <!-- Interactive heatmap -->
         <section class="panel map-panel">
             <div class="panel-heading">
-                <h2>Surat Pollution Heatmap</h2>
+                <h2>Pollution Heatmap</h2>
                 <p>
                     Explore pollution and intervention priorities
                     at your measured coordinates.
@@ -94,11 +129,11 @@
                 </select>
 
                 <button id="resetMap" type="button">
-                    Reset to Surat
+                    Fit to data
                 </button>
             </div>
 
-            <div id="priorityMap" aria-label="Interactive map of Surat"></div>
+            <div id="priorityMap" aria-label="Interactive map of measured locations"></div>
 
             <div class="map-legend">
                 <span><i class="legend-dot high"></i> High</span>
