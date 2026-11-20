@@ -119,6 +119,24 @@ def load_one(path: Path) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
+
+def _estimate_speed(df: pd.DataFrame) -> pd.Series:
+    previous = df[["timestamp", "latitude", "longitude"]].shift()
+    ambiguous = df["timestamp"].notna() & df["timestamp"].duplicated(keep=False)
+    elapsed_hours = (df["timestamp"] - previous["timestamp"]).dt.total_seconds() / 3600
+    lat1 = np.radians(previous["latitude"])
+    lat2 = np.radians(df["latitude"])
+    delta_lat = lat2 - lat1
+    delta_lon = np.radians(df["longitude"] - previous["longitude"])
+    haversine = (
+        np.sin(delta_lat / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2) ** 2
+    ).clip(0, 1)
+    distance_km = 2 * 6371.0088 * np.arcsin(np.sqrt(haversine))
+    valid = (elapsed_hours > 0) & ~ambiguous & ~ambiguous.shift(fill_value=False)
+    return (distance_km / elapsed_hours.where(valid)).where(valid)
+
+
 def prepare(
     df: pd.DataFrame,
     source: str,
@@ -158,6 +176,13 @@ def prepare(
         "latitude": ({"latitude", "lat"}, ("latitude",)),
         "longitude": ({"longitude", "lon", "long"}, ("longitude",)),
         "PM2.5": ({"pm25"}, ("pm25",)),
+        "PM10": ({"pm10"}, ("pm10",)),
+        "CO2": ({"co2"}, ()),
+        "SO2": ({"so2"}, ()),
+        "NO2": ({"no2"}, ()),
+        "CO": ({"co"}, ()),
+        "O3": ({"o3"}, ()),
+        "H2S": ({"h2s"}, ()),
         "TEMP.": ({"temp", "temperature"}, ("temperature",)),
         "HUMI.": ({"humi", "humidity", "relativehumidity"}, ("humidity",)),
     }
@@ -185,7 +210,9 @@ def prepare(
     else:
         duplicate_columns = list(df.columns)
     df = df.drop_duplicates(subset=duplicate_columns)
-    return df.sort_values("timestamp").reset_index(drop=True)
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["estimated_speed_kmh"] = _estimate_speed(df)
+    return df
 
 def run_preprocessing(output_dir: Optional[Path] = None) -> pd.DataFrame:
     processed_dir = Path(output_dir) if output_dir is not None else PROCESSED

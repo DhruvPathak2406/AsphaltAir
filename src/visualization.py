@@ -19,7 +19,7 @@ def _measurement_columns(df):
         "datecollected", "samplingdate", "time", "measurementtime",
         "timeofmeasurement", "sampletime", "recordedtime", "timeofobservation",
         "timecollected", "latitude", "lat", "longitude", "lon", "long",
-        "sourcefile", "id", "index", "recordid", "serialnumber", "stationid",
+        "sourcefile", "estimatedspeedkmh", "id", "index", "recordid", "serialnumber", "stationid",
     }
     measurements = {}
     for column in df.columns:

@@ -13,12 +13,53 @@ import pandas as pd
 
 import main
 from server import DashboardHandler, app
+from src.hotspot_detection import detect_hotspots
 from src.preprocessing import prepare
 import src.visualization as visualization
 from src.visualization import _measurement_columns, save_pm25_trend
 
 
 class DynamicDatasetTests(unittest.TestCase):
+    def test_haversine_speed_and_ambiguous_or_missing_locations(self):
+        source = pd.DataFrame({
+            "timestamp": [
+                "2025-01-01 00:00:00", "2025-01-01 01:00:00",
+                "2025-01-01 02:00:00", "2025-01-01 02:00:00",
+                "2025-01-01 03:00:00", "2025-01-01 04:00:00",
+                "2025-01-01 05:00:00", "2025-01-01 06:00:00",
+            ],
+            "latitude": [0, 0, 0, 0, 0, None, 0, 0],
+            "longitude": [0, 1, 2, 3, 4, 5, 6, 6],
+            "PM2.5": [1, 2, 3, 4, 5, 6, 7, 8],
+        })
+        speeds = prepare(source, "track.csv")["estimated_speed_kmh"]
+        self.assertAlmostEqual(speeds.iloc[1], 111.195, places=2)
+        self.assertTrue(speeds.iloc[[0, 2, 3, 4, 5, 6]].isna().all())
+        self.assertEqual(speeds.iloc[7], 0)
+
+    def test_hotspot_speed_correlation_and_insufficient_variation(self):
+        source = pd.DataFrame({
+            "timestamp": pd.date_range("2025-01-01", periods=4, freq="s"),
+            "latitude": [0, 0, 0, 0],
+            "longitude": [0, 0.000001, 0.000003, 0.000006],
+            "PM2.5": [0, 1, 2, 3],
+        })
+        cleaned = prepare(source, "track.csv")
+        hotspot = detect_hotspots(cleaned, min_readings=1).iloc[0]
+        self.assertEqual(hotspot["speed_pm25_pairs"], 3)
+        self.assertAlmostEqual(hotspot["speed_pm25_correlation"], 1)
+        self.assertAlmostEqual(
+            hotspot["average_speed_kmh"], cleaned["estimated_speed_kmh"].mean()
+        )
+        cleaned["PM2.5"] = 1
+        self.assertTrue(pd.isna(
+            detect_hotspots(cleaned, min_readings=1).iloc[0]["speed_pm25_correlation"]
+        ))
+        cleaned.loc[2:, "estimated_speed_kmh"] = float("nan")
+        self.assertTrue(pd.isna(
+            detect_hotspots(cleaned, min_readings=1).iloc[0]["speed_pm25_correlation"]
+        ))
+
     def test_prepares_and_plots_dataset_with_unfamiliar_measurement_columns(self):
         source = pd.DataFrame({
             "When recorded": ["2025-01-01 10:00", "2025-01-01 11:00"],
@@ -141,6 +182,47 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(result["priority"][0]["latitude_group"], 22.5)
         downloaded = pd.read_csv(io.StringIO(result["cleaned_csv"]))
         self.assertEqual(downloaded["PM2.5"].tolist(), list(range(1, 12)))
+
+    def test_upload_exposes_speed_and_local_correlation(self):
+        source = "timestamp,latitude,longitude,PM2.5\n" + "".join(
+            f"2025-01-01 00:00:{i:02d},0,{i * (i + 1) * 0.00000005},{i}\n"
+            for i in range(11)
+        )
+        status, result = self.upload("track.csv", source.encode())
+        self.assertEqual(status, 200)
+        self.assertIsNone(result["cleaned"][0]["estimated_speed_kmh"])
+        self.assertGreater(result["cleaned"][1]["estimated_speed_kmh"], 0)
+        self.assertEqual(result["priority"][0]["speed_pm25_pairs"], 10)
+        self.assertAlmostEqual(result["priority"][0]["speed_pm25_correlation"], 1)
+        self.assertEqual(result["priority"][0]["ips"], 100)
+
+    def test_upload_averages_each_pollutant_at_hotspots(self):
+        source = "timestamp,latitude,longitude,PM2.5,pm10,co2,so2,no2,co,o3,h2s\n"
+        source += "".join(
+            f"2025-01-{i:02d},22.5,88.3,20,10,20,30,40,50,60,70\n"
+            for i in range(1, 11)
+        )
+        source += "2025-01-11,22.5,88.3,,21,31,invalid,51,61,71,81\n"
+        status, result = self.upload("pollutants.csv", source.encode())
+        self.assertEqual(status, 200)
+        hotspot = result["priority"][0]
+        self.assertEqual(hotspot["readings"], 10)
+        for field, expected in {
+            "average_pm10": 11, "average_co2": 21, "average_so2": 30,
+            "average_no2": 41, "average_co": 51, "average_o3": 61,
+            "average_h2s": 71,
+        }.items():
+            with self.subTest(field=field):
+                self.assertAlmostEqual(hotspot[field], expected)
+        self.assertEqual(hotspot["ips"], 100)
+
+    def test_missing_pollutants_are_not_zero_filled(self):
+        source = "timestamp,latitude,longitude,PM2.5\n" + "".join(
+            f"2025-01-{i:02d},22.5,88.3,20\n" for i in range(1, 11)
+        )
+        status, result = self.upload("pollutants.csv", source.encode())
+        self.assertEqual(status, 200)
+        self.assertIsNone(result["priority"][0]["average_co2"])
 
     def test_csv_upload_skips_rows_with_extra_fields_and_reports_count(self):
         headers = ["timestamp", "PM2.5", "latitude", "longitude"] + [

@@ -14,6 +14,7 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory
 
 from main import main as run_pipeline
+from src.cpcb import CPCBError, get_station_data
 from src.hotspot_detection import detect_hotspots
 from src.preprocessing import _read_csv_tolerant, prepare
 from src.priority_scoring import calculate_priority
@@ -154,6 +155,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/cpcb":
+            params = parse_qs(parsed.query)
+            try:
+                self.send_json(HTTPStatus.OK, get_station_data(
+                    params.get("city", [""])[0], params.get("state", [""])[0]
+                ))
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except CPCBError as error:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+            return
         if parsed.path == "/api/dashboard":
             try:
                 output_dir = VERCEL_OUT if os.environ.get("VERCEL") else None
@@ -204,6 +216,20 @@ def api_dashboard():
     except Exception as error:
         app.logger.exception("Dashboard refresh failed")
         return jsonify({"error": str(error)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+
+@app.get("/api/cpcb")
+def api_cpcb():
+    try:
+        response = jsonify(get_station_data(
+            request.args.get("city", ""), request.args.get("state", "")
+        ))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except ValueError as error:
+        return jsonify({"error": str(error)}), HTTPStatus.BAD_REQUEST
+    except CPCBError as error:
+        return jsonify({"error": str(error)}), HTTPStatus.SERVICE_UNAVAILABLE
 
 
 @app.post("/api/upload")
